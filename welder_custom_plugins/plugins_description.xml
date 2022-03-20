@@ -1,0 +1,9 @@
+<library path="welder_panel">
+  <class name="welder_panel/WelderDashboard"
+         type="welder_dashboard::WelderPanel"
+         base_class_type="rviz_common::Panel">
+    <description>
+      A panel widget allowing control of the welder.
+    </description>
+  </class>
+</library>
