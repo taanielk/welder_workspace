@@ -44,7 +44,7 @@ using std::placeholders::_1;
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("motion_planning_logger");
 std::shared_ptr<rclcpp::Node> motion_planning_node;
 pcl::PointCloud<pcl::PointXYZ>::Ptr current_camera_cloud (new pcl::PointCloud<pcl::PointXYZ>);
-pcl::PointCloud<pcl::PointXYZ>::Ptr search_result (new pcl::PointCloud<pcl::PointXYZ>);
+pcl::PointCloud<pcl::PointNormal>::Ptr search_result (new pcl::PointCloud<pcl::PointNormal>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr object_pointcloud_wo_normals (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointNormal>::Ptr object_pointcloud (new pcl::PointCloud<pcl::PointNormal>); 
@@ -75,11 +75,11 @@ std::vector<geometry_msgs::msg::Pose> calculate_circle_from_center(float centerX
 std::vector<geometry_msgs::msg::Pose> calculate_circle_ori(float centerX, float centerY, float z, float w, float radius){
   std::vector<geometry_msgs::msg::Pose> waypoints;
   geometry_msgs::msg::Pose robot_pose;
-  tf2::Vector3 center_pos = tf2::Vector3(0.2, 0, 0.8);
+  tf2::Vector3 center_pos = tf2::Vector3(centerX, centerY, z);
   tf2::Vector3 goal_pos;
   tf2::Vector3 goal_dir = tf2::Vector3(1,0,0); //forward pointing unit vec
   tf2::Vector3 norm_vec;
-  goal_dir *= 0.2; // circle radius
+  goal_dir *= radius; // circle radius
   tf2::Quaternion q_rot; //rotation for unit vec (needed for the circle generation)
   //tf2::Quaternion q_veelmingirot; //rotation for unit vec
   //q_veelmingirot.setRPY(); //rotation for unit vec
@@ -99,9 +99,49 @@ std::vector<geometry_msgs::msg::Pose> calculate_circle_ori(float centerX, float 
     // convert form quaternion to orientation message
     geometry_msgs::msg::Quaternion qmsg;
     qmsg = Eigen::toMsg(quat);
-    robot_pose.orientation = qmsg;  
+    robot_pose.orientation = qmsg;
     waypoints.push_back(robot_pose);
     RCLCPP_INFO(LOGGER, "q_rot: %f %f %f %f", q_rot.x(), q_rot.y(), q_rot.z(), q_rot.w());
+  }
+  return waypoints;
+}
+
+std::vector<geometry_msgs::msg::Pose> calculate_orientation(pcl::PointCloud<pcl::PointNormal>::Ptr pc){
+  std::vector<geometry_msgs::msg::Pose> waypoints;
+  geometry_msgs::msg::Pose robot_pose;
+  tf2::Vector3 goal_pos;
+  tf2::Vector3 goal_dir = tf2::Vector3(0,0,0); //forward pointing unit vec
+  tf2::Vector3 norm_vec;
+  goal_dir *= 0.2; // circle radius
+  tf2::Quaternion q_rot; //rotation for unit vec (needed for the circle generation)
+  //tf2::Quaternion q_veelmingirot; //rotation for unit vec
+  //q_veelmingirot.setRPY(); //rotation for unit vec
+  float angle = 0;
+  for(auto elem : pc->points){
+    std::cout << elem << std::endl;
+    // goal_dir = tf2::Vector3(elem.normal_x,elem.normal_y,elem.normal_z); //forward pointing unit vec
+    // q_rot.setRPY(0, 0, angle);                                 // define rotation
+    // goal_pos = tf2::quatRotate(q_rot, goal_dir);  // apply the center offset for the
+                                                                 // rotated unit vec
+    
+    // q_rot.setRPY(0, 0, M_PI - angle);  // align goal orientation towards the center of the circle
+    norm_vec = tf2::Vector3(elem.normal_x,elem.normal_y,elem.normal_z);//tf2::quatRotate(q_rot, goal_dir);  // to be substituted with the normal data from PCL. 
+    // convert to Eigen for a moment, and build quaternion from 2 vectors
+    Eigen::Vector3d vec1(norm_vec); // normal
+    Eigen::Vector3d vec2(1, 0, 0);  // fwd direction
+    Eigen::Quaterniond quat = Eigen::Quaterniond::FromTwoVectors(vec1, vec2);
+
+    // convert from vector3 to pose message 
+    // robot_pose.position = tf2::toMsg(goal_pos, robot_pose.position);  
+    // convert form quaternion to orientation message
+    geometry_msgs::msg::Quaternion qmsg;
+    qmsg = Eigen::toMsg(quat);
+    robot_pose.orientation = qmsg;
+    robot_pose.position.x = elem.x;
+    robot_pose.position.y = elem.y;
+    robot_pose.position.z = elem.z;
+    waypoints.push_back(robot_pose);
+    // RCLCPP_INFO(LOGGER, "q_rot: %f %f %f %f", q_rot.x(), q_rot.y(), q_rot.z(), q_rot.w());
   }
   return waypoints;
 }
@@ -240,18 +280,31 @@ void add_to_pointcloud(){
   extract.setKeepOrganized (true);
   extract.filter(*transformed_cloud);
   
+
+  // std::cout << "height is " << transformed_cloud->height << '\n';
+
   *object_pointcloud_wo_normals += *transformed_cloud;
 
-  ne.setInputCloud(current_camera_cloud);
-  ne.compute(*normals);\
+  // std::cout << "height is " << object_pointcloud_wo_normals->height << '\n';
 
-  pcl::concatenateFields(*current_camera_cloud, *normals, *pointcloud_with_normals);
+  ne.setInputCloud(transformed_cloud);
+  ne.compute(*normals);
+
+  pcl::concatenateFields(*transformed_cloud, *normals, *pointcloud_with_normals);
 
   *object_pointcloud += *pointcloud_with_normals;
+  // std::cout << "height is " << pointcloud_with_normals->height << '\n';
+  // std::cout << "height is " << object_pointcloud->height << '\n';
 
-  std::cout << object_pointcloud->size() << std::endl;
+
+  std::cout << pointcloud_with_normals->points[30000] << std::endl;
+  std::cout << pointcloud_with_normals->points[13567] << std::endl;
+  std::cout << pointcloud_with_normals->points[225] << std::endl;
+  std::cout << pointcloud_with_normals->points[15062] << std::endl;
+  std::cout << pointcloud_with_normals->points[1000] << std::endl;
+
   // std::cout << cloud_filtered->size() << std::endl;
-  std::cout << p_obstacles->size() << std::endl;
+  // std::cout << p_obstacles->size() << std::endl;
   std::cout << "added cloud" << std::endl;
 
 }
@@ -281,7 +334,7 @@ void scan_object(std::shared_ptr<rclcpp::Node> motion_node){
   visual_tools.deleteAllMarkers();
 
   // std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_from_center(0.1, 0.2, 0.7, 0.5, 0.2);
-  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_ori(0.1, 0.2, 0.7, 0.5, 0.2);
+  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_ori(0.0, 0.2, 0.7, 0.5, 0.03);
 
 
   //std::cout << move_group.getCurrentRPY() << std::endl;
@@ -310,6 +363,36 @@ void scan_object(std::shared_ptr<rclcpp::Node> motion_node){
 
   //visual_tools.deleteAllMarkers();
   //visual_tools.trigger();
+}
+
+double distance(pcl::PointNormal point1, pcl::PointNormal point2){
+    double d = sqrt(pow(point2.x - point1.x, 2) +
+                pow(point2.y - point1.y, 2) +
+                pow(point2.z - point1.z, 2) * 1.0);
+    //std::cout << d << std::endl;
+    return d;
+}
+
+void find_normals(pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals, pcl::PointCloud<pcl::PointNormal>::Ptr cloud_wo_normals){
+  for(auto point : cloud_wo_normals->points){
+    double old_distance = 40.0;
+    pcl::PointNormal closest_point;
+    for(auto elem : cloud_with_normals->points){
+      double new_distance = distance(point, elem);
+      if(new_distance<old_distance){
+        closest_point = elem;
+        old_distance = new_distance;
+        // std::cout << elem.normal_x << std::endl;
+      }
+    }
+    point.normal_x = closest_point.normal_x;
+    point.normal_y = closest_point.normal_y;
+    point.normal_z = closest_point.normal_z;
+    // std::cout << closest_point.normal_x << std::endl;
+    // std::cout << closest_point.normal_x << std::endl;
+    // std::cout << closest_point.normal_x << std::endl;
+
+  }
 }
 
 std::vector<geometry_msgs::msg::Pose> pointcloud_to_waypoints(pcl::PointCloud<pcl::PointXYZ>::Ptr pc){
@@ -342,9 +425,9 @@ void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
 
 
   
-  std::vector<geometry_msgs::msg::Pose> waypoints = pointcloud_to_waypoints(search_result);
-
-
+  // std::vector<geometry_msgs::msg::Pose> waypoints = pointcloud_to_waypoints(search_result);
+  find_normals(object_pointcloud, search_result);
+  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_orientation(search_result);
   // Visualize the plan in RViz
   visual_tools.deleteAllMarkers();
   visual_tools.publishPath(waypoints, rvt::LIME_GREEN, rvt::SMALL);
@@ -358,8 +441,8 @@ void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
   move_group.move();
 
   moveit_msgs::msg::RobotTrajectory trajectory;
-  const double jump_threshold = 0.5;
-  const double eef_step = 0.5;
+  const double jump_threshold = 0.0;
+  const double eef_step = 0.05;
   double fraction = move_group.computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
   move_group.execute(trajectory);
 
@@ -471,7 +554,7 @@ class ScannedCloudPublisher : public rclcpp::Node
     void timer_callback()
     {
       sensor_msgs::msg::PointCloud2 output;
-      pcl::toROSMsg(*object_pointcloud_wo_normals, output);
+      pcl::toROSMsg(*object_pointcloud, output);
       output.header.frame_id = "world"; //d435i_depth_optical_frame
       // std::cout << output.header.frame_id << std::endl;
       output.header.stamp = rclcpp::Clock().now();
