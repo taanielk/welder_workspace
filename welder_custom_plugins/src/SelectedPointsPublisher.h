@@ -89,7 +89,7 @@ public Q_SLOTS:
    */
   void updateTopic();
 
-  void PointCloudsCallback(const sensor_msgs::msg::PointCloud2::SharedPtr &pc_msg);
+  void PointCloudsCallback(const sensor_msgs::msg::PointCloud2::SharedPtr pc_msg);
 
 protected:
   int _processSelectedAreaAndFindPoints();
