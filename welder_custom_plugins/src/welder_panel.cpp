@@ -43,6 +43,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 
 #include "welder_panel.hpp"
+#include "rviz_common/display_context.hpp"
 
 
 namespace welder_dashboard
@@ -156,6 +157,12 @@ void WelderPanel::moveHome()
   msg.buttons.resize(1);
   msg.buttons[0] = 1;
   joy_publisher_->publish(msg);
+
+
+  
+  //rviz_common::DisplayContext* ctx = this->getDisplayContext();
+  auto sel_manager = this->getDisplayContext()->getSelectionManager();
+
 }
 
 void WelderPanel::moveScan()
