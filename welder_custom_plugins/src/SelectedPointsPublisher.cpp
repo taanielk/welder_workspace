@@ -34,6 +34,8 @@
 #include "rviz_common/properties/property_tree_delegate.hpp"
 #include "rviz_common/properties/splitter_handle.hpp"
 #include "rviz_common/properties/status_list.hpp"
+#include "rviz_common/properties/property_tree_model.hpp"
+#include "rviz_common/properties/vector_property.hpp"
 
 #include <pcl/filters/crop_box.h>
 #include <pcl/common/angles.h>
@@ -77,7 +79,7 @@ void SelectedPointsPublisher::updateTopic()
     num_selected_points_ = 0;
 }
 
-void SelectedPointsPublisher::PointCloudsCallback(const sensor_msgs::msg::PointCloud2::SharedPtr &pc_msg)
+void SelectedPointsPublisher::PointCloudsCallback(const sensor_msgs::msg::PointCloud2::SharedPtr pc_msg)
 {
     // We only publish a message with the reception of the original pc (maybe we also do not need to copy the received pc, because is what we published!)
     if(this->accumulated_segment_pc_->points.size() == 0)
@@ -91,6 +93,7 @@ void SelectedPointsPublisher::PointCloudsCallback(const sensor_msgs::msg::PointC
 
 int SelectedPointsPublisher::processKeyEvent( QKeyEvent* event, rviz_common::RenderPanel* panel )
 {
+        (void) panel; // Suppress unused param compiler warning
         if(event->type() == QKeyEvent::KeyPress)
         {
             // if(event->key() == 'c' || event->key() == 'C')
@@ -180,6 +183,7 @@ int SelectedPointsPublisher::processKeyEvent( QKeyEvent* event, rviz_common::Ren
             //                            "Select a new area and press '+' again to accumulate more points, or press 'y' to publish the accumulated point cloud.");
             // }
         }
+        return rviz_common::Tool::Render;
 }
 
 int SelectedPointsPublisher::processMouseEvent( rviz_common::ViewportMouseEvent& event )
