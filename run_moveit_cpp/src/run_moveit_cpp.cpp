@@ -33,6 +33,7 @@
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/extract_indices.h>
 
+#include <pcl/filters/convolution.h>
 // https://ros-planning.github.io/moveit_tutorials/doc/move_group_interface/move_group_interface_tutorial.html
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -45,9 +46,11 @@ static const rclcpp::Logger LOGGER = rclcpp::get_logger("motion_planning_logger"
 std::shared_ptr<rclcpp::Node> motion_planning_node;
 pcl::PointCloud<pcl::PointXYZ>::Ptr current_camera_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointNormal>::Ptr search_result (new pcl::PointCloud<pcl::PointNormal>);
+pcl::PointCloud<pcl::PointNormal>::Ptr search_result_combined (new pcl::PointCloud<pcl::PointNormal>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr object_pointcloud_wo_normals (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointNormal>::Ptr object_pointcloud (new pcl::PointCloud<pcl::PointNormal>); 
+std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> list_of_search_results;
 rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scanned_cloud_publisher;
 sensor_msgs::msg::PointCloud2 output;
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -120,15 +123,16 @@ std::vector<geometry_msgs::msg::Pose> calculate_orientation(pcl::PointCloud<pcl:
   for(auto elem : pc->points){
     std::cout << elem << std::endl;
     // goal_dir = tf2::Vector3(elem.normal_x,elem.normal_y,elem.normal_z); //forward pointing unit vec
-    // q_rot.setRPY(0, 0, angle);                                 // define rotation
-    // goal_pos = tf2::quatRotate(q_rot, goal_dir);  // apply the center offset for the
+    q_rot.setRPY(0, 0, angle);                                 // define rotation
+    goal_pos = tf2::quatRotate(q_rot, goal_dir);  // apply the center offset for the
                                                                  // rotated unit vec
     
-    // q_rot.setRPY(0, 0, M_PI - angle);  // align goal orientation towards the center of the circle
-    norm_vec = tf2::Vector3(elem.normal_x,elem.normal_y,elem.normal_z);//tf2::quatRotate(q_rot, goal_dir);  // to be substituted with the normal data from PCL. 
+    q_rot.setRPY(0, 0, M_PI - angle);  // align goal orientation towards the center of the circle
+    tf2::quatRotate(q_rot, goal_dir);  // to be substituted with the normal data from PCL. 
+    // norm_vec = tf2::Vector3(elem.normal_x,elem.normal_y,elem.normal_z);//tf2::quatRotate(q_rot, goal_dir);  // to be substituted with the normal data from PCL. 
     // convert to Eigen for a moment, and build quaternion from 2 vectors
     Eigen::Vector3d vec1(norm_vec); // normal
-    Eigen::Vector3d vec2(1, 0, 0);  // fwd direction
+    Eigen::Vector3d vec2(0, 0, 0);  // fwd direction
     Eigen::Quaterniond quat = Eigen::Quaterniond::FromTwoVectors(vec1, vec2);
 
     // convert from vector3 to pose message 
@@ -199,8 +203,7 @@ static bool meshToShapeMsg(const pcl::PolygonMesh& in, shape_msgs::msg::Mesh& me
   return true;
 }
 
-void add_mesh_to_movegroup()
-{
+void add_mesh_to_movegroup(){
   pcl::OrganizedFastMesh<pcl::PointXYZ>::Ptr orgMesh (new pcl::OrganizedFastMesh<pcl::PointXYZ>());
   pcl::PolygonMesh::Ptr triangles (new pcl::PolygonMesh);
   //pcl::PolygonMesh triangles ;
@@ -311,7 +314,37 @@ void add_to_pointcloud(){
 
 void move_to_start(std::shared_ptr<rclcpp::Node> motion_node){
   const std::string PLANNING_GROUP = "ur_manipulator";
-  moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
+  moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);  
+  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+
+  moveit_msgs::msg::CollisionObject collision_object;
+  collision_object.header.frame_id = move_group.getPlanningFrame();
+  
+
+  collision_object.id = "box1";
+
+  shape_msgs::msg::SolidPrimitive primitive;
+  primitive.type = primitive.BOX;
+  primitive.dimensions.resize(3);
+  primitive.dimensions[primitive.BOX_X] = 1.5;
+  primitive.dimensions[primitive.BOX_Y] = 1.5;
+  primitive.dimensions[primitive.BOX_Z] = 0.0;
+
+  geometry_msgs::msg::Pose box_pose;
+  box_pose.orientation.w = 0.0;
+  box_pose.position.x = 0.0;
+  box_pose.position.y = 0.0;
+  box_pose.position.z = -0.01;
+
+  collision_object.primitives.push_back(primitive);
+  collision_object.primitive_poses.push_back(box_pose);
+  collision_object.operation = collision_object.ADD;
+
+  std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
+  collision_objects.push_back(collision_object);
+
+  planning_scene_interface.addCollisionObjects(collision_objects);
+
   move_group.setJointValueTarget(move_group.getNamedTargetValues("home"));
   move_group.move();
 }
@@ -374,23 +407,19 @@ double distance(pcl::PointNormal point1, pcl::PointNormal point2){
 }
 
 void find_normals(pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals, pcl::PointCloud<pcl::PointNormal>::Ptr cloud_wo_normals){
-  for(auto point : cloud_wo_normals->points){
+  for(int i = 0;i<cloud_wo_normals->points.size(); i++){//auto point : cloud_wo_normals->points
     double old_distance = 40.0;
-    pcl::PointNormal closest_point;
-    for(auto elem : cloud_with_normals->points){
-      double new_distance = distance(point, elem);
+    int closest_point = 0;
+    for(int j = 0;j<cloud_with_normals->points.size();j++){//auto elem : cloud_with_normals->points
+      double new_distance = distance(cloud_wo_normals->points[i], cloud_with_normals->points[j]);
       if(new_distance<old_distance){
-        closest_point = elem;
+        closest_point = j;
         old_distance = new_distance;
-        // std::cout << elem.normal_x << std::endl;
       }
     }
-    point.normal_x = closest_point.normal_x;
-    point.normal_y = closest_point.normal_y;
-    point.normal_z = closest_point.normal_z;
-    // std::cout << closest_point.normal_x << std::endl;
-    // std::cout << closest_point.normal_x << std::endl;
-    // std::cout << closest_point.normal_x << std::endl;
+    cloud_wo_normals->points[i].normal_x = cloud_with_normals->points[closest_point].normal_x;
+    cloud_wo_normals->points[i].normal_y = cloud_with_normals->points[closest_point].normal_y;
+    cloud_wo_normals->points[i].normal_z = cloud_with_normals->points[closest_point].normal_z;
 
   }
 }
@@ -409,6 +438,7 @@ std::vector<geometry_msgs::msg::Pose> pointcloud_to_waypoints(pcl::PointCloud<pc
   waypoints.pop_back();
   return waypoints;
 }
+
 
 //KIRJUTA SIIA POINTCLOUD TO WAYPOINTS CONVERTER
 void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
@@ -429,6 +459,11 @@ void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
   find_normals(object_pointcloud, search_result);
   std::vector<geometry_msgs::msg::Pose> waypoints = calculate_orientation(search_result);
   // Visualize the plan in RViz
+  reverse(waypoints.begin(), waypoints.end());
+
+  for (int i = 2; i < waypoints.size(); i += 1){
+    waypoints.erase(waypoints.begin() + i);
+  }
   visual_tools.deleteAllMarkers();
   visual_tools.publishPath(waypoints, rvt::LIME_GREEN, rvt::SMALL);
   std::cout << waypoints.size() << std::endl;
@@ -445,6 +480,50 @@ void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
   const double eef_step = 0.05;
   double fraction = move_group.computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
   move_group.execute(trajectory);
+
+  //visual_tools.deleteAllMarkers();
+  //visual_tools.trigger();
+}
+
+//https://stackoverflow.com/questions/7811761/smoothing-a-2d-line-from-an-array-of-points
+void plan_weld_object(std::shared_ptr<rclcpp::Node> motion_node){
+  const std::string PLANNING_GROUP = "ur_manipulator";
+  moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
+  move_group.setEndEffectorLink("gripper_link");
+  namespace rvt = rviz_visual_tools;
+  moveit_visual_tools::MoveItVisualTools visual_tools(motion_node, "base_link", "welding_demo_tutorial",
+                                                      move_group.getRobotModel());
+  visual_tools.deleteAllMarkers();
+
+  // std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_from_center(0.1, 0.2, 0.7, 0.5, 0.2);
+  std::cout << search_result->size() << std::endl;
+
+
+  moveit::planning_interface::MoveGroupInterface::Plan my_plan;
+  // std::vector<geometry_msgs::msg::Pose> waypoints = pointcloud_to_waypoints(search_result);
+  find_normals(object_pointcloud, search_result);
+  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_orientation(search_result);
+  // Visualize the plan in RViz
+  visual_tools.deleteAllMarkers();
+  visual_tools.publishPath(waypoints, rvt::LIME_GREEN, rvt::SMALL);
+  std::cout << waypoints.size() << std::endl;
+  for (std::size_t i = 0; i < waypoints.size(); ++i)
+    visual_tools.publishAxisLabeled(waypoints[i], "pt" + std::to_string(i), rvt::SMALL);
+  visual_tools.trigger();
+
+
+
+
+  // move_group.setPoseTarget(waypoints.front());
+  // move_group.plan();
+
+  moveit_msgs::msg::RobotTrajectory trajectory;
+  const double jump_threshold = 0.0;
+  const double eef_step = 0.05;
+  double fraction = move_group.computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
+  // my_plan.trajectory_ = trajectory;
+  // group->execute(plan);
+  move_group.plan(my_plan);
 
   //visual_tools.deleteAllMarkers();
   //visual_tools.trigger();
@@ -482,20 +561,36 @@ class PanelCommandSubscriber : public rclcpp::Node
           // pcl::toROSMsg(*object_pointcloud, output);
           // scanned_cloud_publisher->publish(output);
           break;
-        //plan and execute path
+        //plan path
         case 5:
-          weld_object(motion_planning_node);
+          plan_weld_object(motion_planning_node);
           break;
-
         //DEBUG: TAKE PICTURE
         case 6:
           add_to_pointcloud();
           break;
-
         //DEBUG: STOP
         case 7:
           break;
-
+        //Remove last
+        case 8:
+          if(list_of_search_results.size() != 0){
+            list_of_search_results.pop_back();
+            search_result_combined->clear();
+            for(auto cloud_one :list_of_search_results){
+              *search_result_combined += *cloud_one;
+            }
+          }
+          break;
+        //execute path
+        case 9:
+          weld_object(motion_planning_node);
+          break;
+        //Add to end of list
+        case 10:
+          list_of_search_results.push_back(search_result);
+          *search_result_combined += *search_result;
+          break;
         default:
           break;
       }
@@ -565,6 +660,33 @@ class ScannedCloudPublisher : public rclcpp::Node
     size_t count_;
 };
 
+class CombinedResultPublisher : public rclcpp::Node
+{
+  public:
+    CombinedResultPublisher()
+    : Node("combined_result_publisher"), count_(0)
+    {
+      publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("combined_result", 10);
+      timer_ = this->create_wall_timer(
+      500ms, std::bind(&CombinedResultPublisher::timer_callback, this));
+    }
+
+  private:
+    void timer_callback()
+    {
+      sensor_msgs::msg::PointCloud2 output;
+      pcl::toROSMsg(*search_result_combined, output);
+      output.header.frame_id = "world"; //d435i_depth_optical_frame
+      // std::cout << output.header.frame_id << std::endl;
+      output.header.stamp = rclcpp::Clock().now();
+      publisher_->publish(output);
+    }
+    rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
+    size_t count_;
+};
+
+
 class SearchResultSubscriber : public rclcpp::Node
 {
   public:
@@ -597,12 +719,14 @@ int main(int argc, char** argv)
   auto camera_node = std::make_shared<CameraSubscriber>();
   auto scanned_cloud_publisher = std::make_shared<ScannedCloudPublisher>();
   auto search_cloud_subscriber = std::make_shared<SearchResultSubscriber>();
+  auto combined_result_publisher = std::make_shared<CombinedResultPublisher>();//CombinedResultPublisher
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(camera_node);
   executor.add_node(motion_planning_node);
   executor.add_node(node1);
   executor.add_node(scanned_cloud_publisher);
   executor.add_node(search_cloud_subscriber);
+  executor.add_node(combined_result_publisher);
   // scanned_cloud_publisher = camera_node->template create_publisher<sensor_msgs::msg::PointCloud2>("scanned_cloud", 10);
   executor.spin();
   // std::thread([&executor]() { executor.spin(); }).detach();

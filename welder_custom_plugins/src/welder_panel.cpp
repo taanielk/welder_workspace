@@ -71,8 +71,13 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
 
   // Create a push button
   btn_p_and_ex_ = new QPushButton(this);
-  btn_p_and_ex_->setText("Plan and Execute");
+  btn_p_and_ex_->setText("Plan");
   connect(btn_p_and_ex_, SIGNAL(clicked()), this, SLOT(planAndExecute()));
+
+  // Create a push button
+  btn_ex_ = new QPushButton(this);
+  btn_ex_->setText("Execute");
+  connect(btn_ex_, SIGNAL(clicked()), this, SLOT(execute()));
 
   // Create a push button
   btn_picture_ = new QPushButton(this);
@@ -84,14 +89,26 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
   btn_stop_->setText("Stop");
   connect(btn_stop_, SIGNAL(clicked()), this, SLOT(moveStop()));
 
+  // Create remove last
+  btn_remove_last_ = new QPushButton(this);
+  btn_remove_last_->setText("Remove last");
+  connect(btn_remove_last_, SIGNAL(clicked()), this, SLOT(removeLast()));
+
+  // Create add to list
+  btn_add_ = new QPushButton(this);
+  btn_add_->setText("Add last");
+  connect(btn_add_, SIGNAL(clicked()), this, SLOT(addLast()));
+
   // Horizontal Layout
   QHBoxLayout* hlayout1 = new QHBoxLayout;
   hlayout1->addWidget(btn_home_);
   hlayout1->addWidget(btn_scan_);
   hlayout1->addWidget(btn_add_obj_);
   hlayout1->addWidget(btn_gen_path_);
+  hlayout1->addWidget(btn_add_);
+  hlayout1->addWidget(btn_remove_last_);
   hlayout1->addWidget(btn_p_and_ex_);
-
+  hlayout1->addWidget(btn_ex_);
 
   // Horizontal Layout
   QHBoxLayout* hlayout2 = new QHBoxLayout;
@@ -119,9 +136,9 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
   setLayout(layout);
 
 
-  btn_home_->setEnabled(true);
-  btn_scan_->setEnabled(true);
-  btn_add_obj_->setEnabled(true);
+  // btn_home_->setEnabled(true);
+  // btn_scan_->setEnabled(true);
+  // btn_add_obj_->setEnabled(true);
   updateTopic();
 }
 
@@ -173,7 +190,7 @@ void WelderPanel::generatePath()
 
 void WelderPanel::planAndExecute()
 {
-  RCLCPP_INFO_STREAM(rclcpp::get_logger("welder_panel_logger"), "Plan and execute path");
+  RCLCPP_INFO_STREAM(rclcpp::get_logger("welder_panel_logger"), "Plan");
 
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
@@ -200,6 +217,37 @@ void WelderPanel::moveStop()
   msg.buttons[0] = 7;
   joy_publisher_->publish(msg);
 }
+
+void WelderPanel::removeLast()
+{
+  RCLCPP_INFO_STREAM(rclcpp::get_logger("welder_panel_logger"), "Removing last weld");
+
+  sensor_msgs::msg::Joy msg;
+  msg.buttons.resize(1);
+  msg.buttons[0] = 8;
+  joy_publisher_->publish(msg);
+}
+
+void WelderPanel::execute()
+{
+  RCLCPP_INFO_STREAM(rclcpp::get_logger("welder_panel_logger"), "Execute");
+
+  sensor_msgs::msg::Joy msg;
+  msg.buttons.resize(1);
+  msg.buttons[0] = 9;
+  joy_publisher_->publish(msg);
+}
+
+void WelderPanel::addLast()
+{
+  RCLCPP_INFO_STREAM(rclcpp::get_logger("welder_panel_logger"), "Add last");
+
+  sensor_msgs::msg::Joy msg;
+  msg.buttons.resize(1);
+  msg.buttons[0] = 10;
+  joy_publisher_->publish(msg);
+}
+
 // void WelderPanel::homeRobot()
 // {
 //   RCLCPP_INFO_STREAM(rclcpp::get_logger("welder_panel_logger"), "Home Pose");

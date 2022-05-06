@@ -108,6 +108,12 @@ protected Q_SLOTS:
 
   void updateTopic();
 
+  void removeLast();
+
+  void execute();
+
+  void addLast();
+
   // Then we finish up with protected member variables.
 protected:
   QPushButton *btn_scan_;
@@ -117,6 +123,10 @@ protected:
   QPushButton *btn_picture_;
   QPushButton *btn_home_;
   QPushButton *btn_gen_path_;
+  QPushButton *btn_remove_last_;
+  QPushButton *btn_ex_;
+  QPushButton *btn_add_;
+
   QSpinBox *spin_box_;
   QComboBox *combo_mode_;
 
