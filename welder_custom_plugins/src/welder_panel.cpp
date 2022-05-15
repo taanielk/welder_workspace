@@ -81,13 +81,15 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
   connect(btn_ex_, SIGNAL(clicked()), this, SLOT(execute()));
 
   // Create a push button
-  btn_picture_ = new QPushButton(this);
-  btn_picture_->setText("Take a picture");
-  connect(btn_picture_, SIGNAL(clicked()), this, SLOT(takePicture()));
+  // btn_picture_ = new QPushButton(this);
+  // btn_picture_->setText("Take a picture");
+  // connect(btn_picture_, SIGNAL(clicked()), this, SLOT(takePicture()));
 
   // Create a push button
   btn_stop_ = new QPushButton(this);
   btn_stop_->setText("Stop");
+  btn_stop_->setStyleSheet("QPushButton { background-color: red; }");
+  btn_stop_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   connect(btn_stop_, SIGNAL(clicked()), this, SLOT(moveStop()));
 
   // Create remove last
@@ -99,6 +101,11 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
   btn_add_ = new QPushButton(this);
   btn_add_->setText("Add last");
   connect(btn_add_, SIGNAL(clicked()), this, SLOT(addLast()));
+
+
+  // Create text view
+  status_ = new QLabel(this);
+  status_->setText("Push home to start.");
 
   // Horizontal Layout
   QHBoxLayout* hlayout1 = new QHBoxLayout;
@@ -113,16 +120,17 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
 
   // Horizontal Layout
   QHBoxLayout* hlayout2 = new QHBoxLayout;
-  hlayout2->addWidget(new QLabel(QString("DEBUG:")));
+  // hlayout2->addWidget(new QLabel(QString("DEBUG:")));
+  hlayout2->addWidget(status_);
   hlayout2->addWidget(btn_stop_);
-  hlayout2->addWidget(btn_picture_);
+  // hlayout2->addWidget(btn_picture_);
   // hlayout2->addWidget(spin_box_);
   // hlayout2->addWidget(combo_mode_);
 
   // Horizontal Layout
   // QHBoxLayout* hlayout3 = new QHBoxLayout;
 
-  this->setStyleSheet("QGroupBox {  border: 1px solid gray; padding-top: 0px; }");
+  // this->setStyleSheet("QGroupBox {  border: 1px solid gray; padding-top: 0px; }");
 
   // Group box
   QGroupBox* group_box = new QGroupBox();
@@ -138,9 +146,17 @@ WelderPanel::WelderPanel(QWidget* parent) : rviz_common::Panel(parent)
 
 
   // btn_home_->setEnabled(true);
-  // btn_scan_->setEnabled(true);
-  // btn_add_obj_->setEnabled(true);
+  btn_scan_->setEnabled(false);
+  btn_add_obj_->setEnabled(false);
+  btn_gen_path_->setEnabled(false);
+  btn_p_and_ex_->setEnabled(false);
+  btn_ex_->setEnabled(false);
+  btn_remove_last_->setEnabled(false);
+  btn_add_->setEnabled(false);
+
   updateTopic();
+
+  
 }
 
 void WelderPanel::updateTopic()
@@ -148,6 +164,18 @@ void WelderPanel::updateTopic()
   rclcpp::Node::SharedPtr raw_node = std::make_shared<rclcpp::Node>("welderpanel");
   joy_publisher_ = raw_node->template create_publisher<sensor_msgs::msg::Joy>("panel_command", 10);
   //clock_ = raw_node->get_clock();
+  status_subscriber_ = raw_node->template create_subscription<sensor_msgs::msg::Joy>("/program_status", 10, std::bind(&WelderPanel::statusCallback, this, std::placeholders::_1));
+}
+
+void WelderPanel::statusCallback(const sensor_msgs::msg::Joy::SharedPtr msg){
+  std::cout << msg->buttons[0] << std::endl;
+  // switch (msg->buttons[0]){
+  // case 1:
+  //   std::cout << "Tootab" << std::endl;
+  //   break;
+  // default:
+  //   break;
+  // }
 }
 
 void WelderPanel::moveHome()
@@ -157,9 +185,9 @@ void WelderPanel::moveHome()
   msg.buttons.resize(1);
   msg.buttons[0] = 1;
   joy_publisher_->publish(msg);
+  status_->setText("Last step: HOME");
+  btn_scan_->setEnabled(true);
 
-
-  
   //rviz_common::DisplayContext* ctx = this->getDisplayContext();
   auto sel_manager = this->getDisplayContext()->getSelectionManager();
 
@@ -172,7 +200,9 @@ void WelderPanel::moveScan()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 2;
+  status_->setText("Last step: SCAN");
   joy_publisher_->publish(msg);
+  btn_add_obj_->setEnabled(true);
 }
 
 void WelderPanel::addObjects()
@@ -182,6 +212,8 @@ void WelderPanel::addObjects()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 3;
+  status_->setText("Last step: ADD COLLISION OBJECTS");
+  btn_gen_path_->setEnabled(true);
   joy_publisher_->publish(msg);
 }
 
@@ -192,7 +224,9 @@ void WelderPanel::generatePath()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 4;
+  status_->setText("Last step: GENERATE PATH");
   joy_publisher_->publish(msg);
+
 }
 
 void WelderPanel::planAndExecute()
@@ -202,7 +236,9 @@ void WelderPanel::planAndExecute()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 5;
+  status_->setText("Last step: PLAN");
   joy_publisher_->publish(msg);
+  btn_p_and_ex_->setEnabled(true);
 }
 
 void WelderPanel::takePicture()
@@ -222,6 +258,7 @@ void WelderPanel::moveStop()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 7;
+  status_->setText("Last step: STOPPED");
   joy_publisher_->publish(msg);
 }
 
@@ -232,6 +269,7 @@ void WelderPanel::removeLast()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 8;
+  status_->setText("Last step: REMOVED LAST");
   joy_publisher_->publish(msg);
 }
 
@@ -242,6 +280,7 @@ void WelderPanel::execute()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 9;
+  status_->setText("Last step: WELDING");
   joy_publisher_->publish(msg);
 }
 
@@ -252,6 +291,7 @@ void WelderPanel::addLast()
   sensor_msgs::msg::Joy msg;
   msg.buttons.resize(1);
   msg.buttons[0] = 10;
+  status_->setText("Last step: ADDED PATH");
   joy_publisher_->publish(msg);
 }
 
@@ -277,7 +317,7 @@ void WelderPanel::load(const rviz_common::Config& config)
 {
   rviz_common::Panel::load(config);
 }
-}  // end namespace welder_dashboard
+}  // end namespace welder_panel
 
 #include <pluginlib/class_list_macros.hpp>  // NOLINT
 PLUGINLIB_EXPORT_CLASS(welder_dashboard::WelderPanel, rviz_common::Panel)

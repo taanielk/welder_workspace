@@ -63,7 +63,7 @@
 
 #include <pcl/filters/extract_indices.h>
 
-namespace rviz_plugin_selected_points_publisher
+namespace welder_panel
 {
 
 class SelectedPointsPublisher;
@@ -117,9 +117,9 @@ protected:
   int num_acc_points_;
   int num_selected_points_;
 };
-} // end namespace rviz_plugin_selected_points_publisher
+} 
+// end namespace welder_panel
 
 #endif // SELECTED_POINTS_PUBLISHER_H
 
 ////////////////////////////////////////////////////////////////////////////////
-

@@ -32,6 +32,7 @@
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/extract_indices.h>
+#include <pcl/filters/voxel_grid.h>
 
 #include <pcl/filters/convolution.h>
 // https://ros-planning.github.io/moveit_tutorials/doc/move_group_interface/move_group_interface_tutorial.html
@@ -43,19 +44,25 @@ using namespace std::chrono_literals;
 using std::placeholders::_1;
 
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("motion_planning_logger");
+const std::string PLANNING_GROUP = "ur_manipulator";
 std::shared_ptr<rclcpp::Node> motion_planning_node;
 pcl::PointCloud<pcl::PointXYZ>::Ptr current_camera_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointNormal>::Ptr search_result (new pcl::PointCloud<pcl::PointNormal>);
 pcl::PointCloud<pcl::PointNormal>::Ptr search_result_combined (new pcl::PointCloud<pcl::PointNormal>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud (new pcl::PointCloud<pcl::PointXYZ>);
 pcl::PointCloud<pcl::PointXYZ>::Ptr object_pointcloud_wo_normals (new pcl::PointCloud<pcl::PointXYZ>);
-pcl::PointCloud<pcl::PointNormal>::Ptr object_pointcloud (new pcl::PointCloud<pcl::PointNormal>); 
+pcl::PointCloud<pcl::PointNormal>::Ptr object_pointcloud (new pcl::PointCloud<pcl::PointNormal>);
+std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> list_of_scans;
+std::vector<geometry_msgs::msg::TransformStamped> list_of_scan_transformstamps;
 std::vector<pcl::PointCloud<pcl::PointNormal>::Ptr> list_of_search_results;
+std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> mesh_object_list;
 rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scanned_cloud_publisher;
 sensor_msgs::msg::PointCloud2 output;
 std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
 std::shared_ptr<tf2_ros::TransformListener> transform_listener_;
 geometry_msgs::msg::TransformStamped transformStamped;
+int scanning = 0;
+int soft_status = 0;
 
 
 std::vector<geometry_msgs::msg::Pose> calculate_circle_from_center(float centerX, float centerY, float z, float w, float radius){
@@ -86,11 +93,11 @@ std::vector<geometry_msgs::msg::Pose> calculate_circle_ori(float centerX, float 
   tf2::Quaternion q_rot; //rotation for unit vec (needed for the circle generation)
   //tf2::Quaternion q_veelmingirot; //rotation for unit vec
   //q_veelmingirot.setRPY(); //rotation for unit vec
-  for(float angle = 0; angle < 2*M_PI; angle+=0.5){
-    q_rot.setRPY(0, 0, angle);                                 // define rotation
+  for(float angle = 0.7; angle < M_PI-0.7; angle+=0.7){ //angle < 2*M_PI
+    q_rot.setRPY(0, 0, -angle);                                 // define rotation
     goal_pos = center_pos + tf2::quatRotate(q_rot, goal_dir);  // apply the center offset for the
                                                                  // rotated unit vec
-    q_rot.setRPY(0, 0, M_PI - angle);  // align goal orientation towards the center of the circle
+    q_rot.setRPY(0, 0, M_PI + angle);  // align goal orientation towards the center of the circle
     norm_vec = tf2::quatRotate(q_rot, goal_dir);  // to be substituted with the normal data from PCL. 
     // convert to Eigen for a moment, and build quaternion from 2 vectors
     Eigen::Vector3d vec1(norm_vec); // normal
@@ -151,8 +158,7 @@ std::vector<geometry_msgs::msg::Pose> calculate_orientation(pcl::PointCloud<pcl:
 }
 
 //https://github.com/team-vigir/vigir_perception/blob/master/vigir_point_cloud_proc/include/vigir_point_cloud_proc/mesh_conversions.h
-static bool meshToShapeMsg(const pcl::PolygonMesh& in, shape_msgs::msg::Mesh& mesh)
-{
+static bool meshToShapeMsg(const pcl::PolygonMesh& in, shape_msgs::msg::Mesh& mesh) {
   pcl_msgs::msg::PolygonMesh pcl_msg_mesh;
 
   pcl_conversions::fromPCL(in, pcl_msg_mesh);
@@ -203,46 +209,13 @@ static bool meshToShapeMsg(const pcl::PolygonMesh& in, shape_msgs::msg::Mesh& me
   return true;
 }
 
-void add_mesh_to_movegroup(){
-  pcl::OrganizedFastMesh<pcl::PointXYZ>::Ptr orgMesh (new pcl::OrganizedFastMesh<pcl::PointXYZ>());
-  pcl::PolygonMesh::Ptr triangles (new pcl::PolygonMesh);
-  //pcl::PolygonMesh triangles ;
-  // orgMesh.useDepthAsDistance(true);
-  orgMesh->setTriangulationType (pcl::OrganizedFastMesh<pcl::PointXYZ>::TRIANGLE_RIGHT_CUT  );
-  orgMesh->setInputCloud(transformed_cloud);
-  orgMesh->reconstruct(*triangles);
-  // qDebug("%i", triangles->polygons.size());
-  pcl::io::saveOBJFile("filtered.obj", *triangles);
-
-  shape_msgs::msg::Mesh shape_mesh;
-  meshToShapeMsg(*triangles, shape_mesh);
-
-  const std::string PLANNING_GROUP = "ur_manipulator";
-  moveit::planning_interface::MoveGroupInterface move_group(motion_planning_node, PLANNING_GROUP);
-  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
-
-  moveit_msgs::msg::CollisionObject collision_object;
-  // collision_object.header.frame_id = move_group.getPlanningFrame();
-  collision_object.header.frame_id = "world";
-
-  // geometry_msgs::msg::Pose mesh_pose;
-  // mesh_pose.orientation.w = 1.0;
-  // mesh_pose.position.x = 0.48;
-  // mesh_pose.position.y = 0.0;
-  // mesh_pose.position.z = 0.25;
-
-  collision_object.id = "mesh";
-
-  collision_object.meshes.push_back(shape_mesh);
-  //collision_object.mesh_poses.push_back(mesh_pose);
-  collision_object.operation = collision_object.ADD;
-
-  std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
-  collision_objects.push_back(collision_object);
-
-  RCLCPP_INFO(LOGGER, "Add an object into the world");
-  planning_scene_interface.addCollisionObjects(collision_objects);
-}
+//https://pcl.readthedocs.io/en/latest/voxel_grid.html
+// void downsample_pointcloud(pcl::PointCloud<pcl::PointNormal>::Ptr pointcloud_ptr){
+//   pcl::VoxelGrid<pcl::PointNormal> sor;
+//   sor.setInputCloud(*pointcloud_ptr);
+//   sor.setLeafSize(0.01f, 0.01f, 0.01f);
+//   sor.filter(*cloud_filtered);
+// }
 
 //https://answers.ros.org/question/358163/ros2-performance-issue-in-custom-transformpointcloud-function-compared-to-pcl_rostransformpointcloud-function/
 void tpc (pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_out, geometry_msgs::msg::TransformStamped& transform) {
@@ -285,7 +258,7 @@ void add_to_pointcloud(){
   
 
   // std::cout << "height is " << transformed_cloud->height << '\n';
-
+  mesh_object_list.push_back(transformed_cloud);
   *object_pointcloud_wo_normals += *transformed_cloud;
 
   // std::cout << "height is " << object_pointcloud_wo_normals->height << '\n';
@@ -298,22 +271,136 @@ void add_to_pointcloud(){
   *object_pointcloud += *pointcloud_with_normals;
   // std::cout << "height is " << pointcloud_with_normals->height << '\n';
   // std::cout << "height is " << object_pointcloud->height << '\n';
-
-
-  std::cout << pointcloud_with_normals->points[30000] << std::endl;
-  std::cout << pointcloud_with_normals->points[13567] << std::endl;
-  std::cout << pointcloud_with_normals->points[225] << std::endl;
-  std::cout << pointcloud_with_normals->points[15062] << std::endl;
-  std::cout << pointcloud_with_normals->points[1000] << std::endl;
+  // std::cout << pointcloud_with_normals->points[30000] << std::endl;
+  // std::cout << pointcloud_with_normals->points[13567] << std::endl;
+  // std::cout << pointcloud_with_normals->points[225] << std::endl;
+  // std::cout << pointcloud_with_normals->points[15062] << std::endl;
+  // std::cout << pointcloud_with_normals->points[1000] << std::endl;
 
   // std::cout << cloud_filtered->size() << std::endl;
   // std::cout << p_obstacles->size() << std::endl;
-  std::cout << "added cloud" << std::endl;
+  // std::cout << "added cloud" << std::endl;
 
 }
 
-void move_to_start(std::shared_ptr<rclcpp::Node> motion_node){
-  const std::string PLANNING_GROUP = "ur_manipulator";
+void add_scans_to_pointcloud(){
+  int cloud_counter = 0;
+  for(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud:list_of_scans){
+    std::cout << list_of_scans.size() << std::endl;
+    std::cout << list_of_scan_transformstamps.size() << std::endl;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_pointcloud (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+    pcl::PointCloud<pcl::PointNormal>::Ptr pointcloud_with_normals (new pcl::PointCloud<pcl::PointNormal>);
+
+    pcl::IntegralImageNormalEstimation<pcl::PointXYZ, pcl::Normal> ne;
+    ne.setNormalEstimationMethod (ne.AVERAGE_3D_GRADIENT);
+    ne.setMaxDepthChangeFactor(0.02f);
+    ne.setNormalSmoothingSize(10.0f);
+    tpc(cloud,transformed_pointcloud, list_of_scan_transformstamps[cloud_counter]);
+    cloud_counter++;
+
+    //Remove bad points
+    pcl::PointCloud<pcl::PointXYZ>::Ptr p_obstacles(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices());
+    pcl::ExtractIndices<pcl::PointXYZ> extract;
+    for (int i = 0; i < (*transformed_pointcloud).size(); i++)
+    {
+      if ((transformed_pointcloud->points[i].x == (transformed_pointcloud->begin())->x) && (transformed_pointcloud->points[i].y == (transformed_pointcloud->begin())->y) && (transformed_pointcloud->points[i].z == (transformed_pointcloud->begin())->z)) // e.g. remove all pts below zAvg
+      {
+        inliers->indices.push_back(i);
+      }
+    }
+    extract.setInputCloud(transformed_pointcloud);
+    extract.setIndices(inliers);
+    extract.setNegative(true);
+    extract.setKeepOrganized (true);
+    extract.filter(*transformed_pointcloud);
+    
+
+    // std::cout << "height is " << transformed_cloud->height << '\n';
+    mesh_object_list.push_back(transformed_pointcloud);
+    *object_pointcloud_wo_normals += *transformed_pointcloud;
+
+    // std::cout << "height is " << object_pointcloud_wo_normals->height << '\n';
+
+    ne.setInputCloud(transformed_pointcloud);
+    ne.compute(*normals);
+
+    pcl::concatenateFields(*transformed_pointcloud, *normals, *pointcloud_with_normals);
+
+    *object_pointcloud += *pointcloud_with_normals;
+  }
+  std::cout << object_pointcloud->size() << std::endl;
+  list_of_scans.empty();
+}
+
+void add_mesh_to_movegroup(){
+  moveit::planning_interface::MoveGroupInterface move_group(motion_planning_node, PLANNING_GROUP);
+  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+  std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
+  int pointcloudnumber = 0;
+  //pcl::PolygonMesh triangles ;
+  // orgMesh.useDepthAsDistance(true);
+  std::cout << mesh_object_list.size() << std::endl;
+  for(pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud:mesh_object_list){
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_downsampled (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::OrganizedFastMesh<pcl::PointXYZ>::Ptr orgMesh (new pcl::OrganizedFastMesh<pcl::PointXYZ>());
+    pcl::PolygonMesh::Ptr triangles (new pcl::PolygonMesh);
+
+    // Downsampling or keypoint extraction
+    int scale = 3;
+    cloud_downsampled->width = pointcloud->width / scale;
+    cloud_downsampled->height = pointcloud->height / scale;
+    cloud_downsampled->points.resize(cloud_downsampled->width * cloud_downsampled->height);
+    for( size_t i = 0, ii = 0; i < cloud_downsampled->height; ii += scale, i++){
+        for( size_t j = 0, jj = 0; j < cloud_downsampled->width; jj += scale, j++){
+          cloud_downsampled->at(j, i) = pointcloud->at(jj, ii); //at(column, row)
+        }
+    }
+
+    std::cout << "1" << std::endl;
+    orgMesh->setTriangulationType (pcl::OrganizedFastMesh<pcl::PointXYZ>::TRIANGLE_RIGHT_CUT  );
+    std::cout << "2" << std::endl;
+    orgMesh->setInputCloud(cloud_downsampled);//transformed_cloud
+    std::cout << "3" << std::endl;
+    orgMesh->reconstruct(*triangles);
+  
+    shape_msgs::msg::Mesh shape_mesh;
+    std::cout << "4" << std::endl;
+    meshToShapeMsg(*triangles, shape_mesh);
+
+    moveit_msgs::msg::CollisionObject collision_object;
+    collision_object.header.frame_id = move_group.getPlanningFrame();
+
+    collision_object.id = "mesh"+std::to_string(pointcloudnumber);
+    std::cout << "mesh"+std::to_string(pointcloudnumber) << std::endl;
+    collision_object.meshes.push_back(shape_mesh);
+    //collision_object.mesh_poses.push_back(mesh_pose);
+    collision_object.operation = collision_object.ADD;
+
+    collision_objects.push_back(collision_object);
+    pointcloudnumber++;
+  } 
+  RCLCPP_INFO(LOGGER, "Add an object into the world");
+  planning_scene_interface.addCollisionObjects(collision_objects);
+  // planning_scene_inave been added");
+
+  // std::cout << planning_scene_interface.getKnownObjectNames() << std::endl;
+  // std::cout << planning_scene_interface.getKnownObjectNames(true) << std::endl;
+
+  RCLCPP_INFO(LOGGER, "Objects have been added");
+
+  // std::cout << planning_scene_interface.getKnownObjectNames() << std::endl;
+  // std::cout << planning_scene_interface.getKnownObjectNames(true) << std::endl;
+
+  // for (auto i: planning_scene_interface.getKnownObjectNames(true)){
+  //     std::cout << i;
+  // }
+}
+
+
+void add_floor_object(std::shared_ptr<rclcpp::Node> motion_node){
+  soft_status = 3;
   moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);  
   moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
 
@@ -344,36 +431,42 @@ void move_to_start(std::shared_ptr<rclcpp::Node> motion_node){
   collision_objects.push_back(collision_object);
 
   planning_scene_interface.addCollisionObjects(collision_objects);
+  soft_status = 4;
+}
 
+void move_to_start(std::shared_ptr<rclcpp::Node> motion_node){
+  moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);  
   move_group.setJointValueTarget(move_group.getNamedTargetValues("home"));
-  move_group.move();
+  move_group.asyncMove();
+  soft_status = 1;
+}
+
+void stop(std::shared_ptr<rclcpp::Node> motion_node){
+  moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
+  move_group.stop();
+}
+
+void move_to_scan_start(std::shared_ptr<rclcpp::Node> motion_node){
+  moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
+  move_group.setEndEffectorLink("gripper_link");
+  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_ori(0.0, 0.8, 0.6, 0.5, 0.15);
+  move_group.setPoseTarget(waypoints.front());
+  move_group.asyncMove();
 }
 
 void scan_object(std::shared_ptr<rclcpp::Node> motion_node){
-  const std::string PLANNING_GROUP = "ur_manipulator";
   moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
-
-
   move_group.setEndEffectorLink("gripper_link");
-  // geometry_msgs::msg::PoseStamped pos = move_group.getPoseTarget();
 
-  // std::cout << pos.pose.position.x << std::endl;
   // Visualization
   // ^^^^^^^^^^^^^
   namespace rvt = rviz_visual_tools;
-  moveit_visual_tools::MoveItVisualTools visual_tools(motion_node, "base_link", "welding_demo_tutorial",
-                                                      move_group.getRobotModel());
+  moveit_visual_tools::MoveItVisualTools visual_tools(motion_node, "base_link", "welding_demo_tutorial", move_group.getRobotModel());
 
   visual_tools.deleteAllMarkers();
 
   // std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_from_center(0.1, 0.2, 0.7, 0.5, 0.2);
-  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_ori(0.0, 0.2, 0.7, 0.5, 0.03);
-
-
-  //std::cout << move_group.getCurrentRPY() << std::endl;
-
-  move_group.setPoseTarget(waypoints.front());
-  move_group.move();
+  std::vector<geometry_msgs::msg::Pose> waypoints = calculate_circle_ori(0.0, 0.8, 0.6, 0.5, 0.15);
 
   moveit_msgs::msg::RobotTrajectory trajectory;
   const double jump_threshold = 0.0;
@@ -386,16 +479,12 @@ void scan_object(std::shared_ptr<rclcpp::Node> motion_node){
   std::cout << waypoints.size() << std::endl;
   for (std::size_t i = 0; i < waypoints.size(); ++i)
     visual_tools.publishAxisLabeled(waypoints[i], "pt" + std::to_string(i), rvt::SMALL);
+  // add_to_pointcloud();
+  scanning = 1;
   visual_tools.trigger();
-  move_group.execute(trajectory);
-
-  // for(geometry_msgs::msg::Pose ps : waypoints){
-  //   move_group.setPoseTarget(ps);
-  //   move_group.move();
-  // }
-
-  //visual_tools.deleteAllMarkers();
-  //visual_tools.trigger();
+  move_group.asyncExecute(trajectory);
+  soft_status = 2;
+  // add_to_pointcloud();
 }
 
 double distance(pcl::PointNormal point1, pcl::PointNormal point2){
@@ -439,10 +528,8 @@ std::vector<geometry_msgs::msg::Pose> pointcloud_to_waypoints(pcl::PointCloud<pc
   return waypoints;
 }
 
-
 //KIRJUTA SIIA POINTCLOUD TO WAYPOINTS CONVERTER
 void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
-  const std::string PLANNING_GROUP = "ur_manipulator";
   moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
   move_group.setEndEffectorLink("gripper_link");
   namespace rvt = rviz_visual_tools;
@@ -479,15 +566,12 @@ void weld_object(std::shared_ptr<rclcpp::Node> motion_node){
   const double jump_threshold = 0.0;
   const double eef_step = 0.05;
   double fraction = move_group.computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
-  move_group.execute(trajectory);
-
-  //visual_tools.deleteAllMarkers();
-  //visual_tools.trigger();
+  move_group.asyncExecute(trajectory);
+  soft_status = 7;
 }
 
 //https://stackoverflow.com/questions/7811761/smoothing-a-2d-line-from-an-array-of-points
 void plan_weld_object(std::shared_ptr<rclcpp::Node> motion_node){
-  const std::string PLANNING_GROUP = "ur_manipulator";
   moveit::planning_interface::MoveGroupInterface move_group(motion_node, PLANNING_GROUP);
   move_group.setEndEffectorLink("gripper_link");
   namespace rvt = rviz_visual_tools;
@@ -511,9 +595,6 @@ void plan_weld_object(std::shared_ptr<rclcpp::Node> motion_node){
     visual_tools.publishAxisLabeled(waypoints[i], "pt" + std::to_string(i), rvt::SMALL);
   visual_tools.trigger();
 
-
-
-
   // move_group.setPoseTarget(waypoints.front());
   // move_group.plan();
 
@@ -521,9 +602,10 @@ void plan_weld_object(std::shared_ptr<rclcpp::Node> motion_node){
   const double jump_threshold = 0.0;
   const double eef_step = 0.05;
   double fraction = move_group.computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
-  // my_plan.trajectory_ = trajectory;
+  my_plan.trajectory_ = trajectory;
+  bool success = (move_group.plan(my_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
   // group->execute(plan);
-  move_group.plan(my_plan);
+  // move_group.plan(my_plan);
 
   //visual_tools.deleteAllMarkers();
   //visual_tools.trigger();
@@ -535,8 +617,13 @@ class PanelCommandSubscriber : public rclcpp::Node
     PanelCommandSubscriber()
     : Node("panel_command_subscriber")
     {
+      add_floor_object(motion_planning_node);
       subscription_ = this->create_subscription<sensor_msgs::msg::Joy>(
       "/panel_command", 10, std::bind(&PanelCommandSubscriber::topic_callback, this, _1));
+
+      publisher_ = this->create_publisher<sensor_msgs::msg::Joy>("program_status", 10);
+      timer_ = this->create_wall_timer(
+      500ms, std::bind(&PanelCommandSubscriber::timer_callback, this));
     }
   private:
     void topic_callback(const sensor_msgs::msg::Joy::SharedPtr msg) const
@@ -547,9 +634,9 @@ class PanelCommandSubscriber : public rclcpp::Node
       switch (action_number){
         //move to home pos
         case 1:
-          move_to_start(motion_planning_node);
+          // move_to_start(motion_planning_node);
+          move_to_scan_start(motion_planning_node);
           break;
-
         //move in circular motion aroudn center point (scan)
         case 2:
           scan_object(motion_planning_node);
@@ -571,6 +658,7 @@ class PanelCommandSubscriber : public rclcpp::Node
           break;
         //DEBUG: STOP
         case 7:
+          stop(motion_planning_node);
           break;
         //Remove last
         case 8:
@@ -595,7 +683,15 @@ class PanelCommandSubscriber : public rclcpp::Node
           break;
       }
     }
+    void timer_callback(){
+      sensor_msgs::msg::Joy status_msg;
+      status_msg.buttons.resize(1);
+      status_msg.buttons[0] = soft_status;
+      publisher_->publish(status_msg);
+    }
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
+    rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr publisher_;
 };
 
 class CameraSubscriber : public rclcpp::Node
@@ -617,6 +713,18 @@ class CameraSubscriber : public rclcpp::Node
         // RCLCPP_INFO(this->get_logger(), "I heard");
         // std::cout << msg->header.frame_id << std::endl;
         pcl::fromROSMsg(*msg, *current_camera_cloud);
+        if(scanning>0 && scanning < 101){
+          if(scanning % 20 == 0){
+            list_of_scans.push_back(current_camera_cloud);
+            list_of_scan_transformstamps.push_back(tf_buffer_->lookupTransform("world", "d435i_depth_optical_frame",tf2::TimePointZero));
+            //add_to_pointcloud(); 
+          }
+          scanning++;
+          if(scanning == 100){
+            add_scans_to_pointcloud();
+            scanning = 0;
+          }
+        }
         // std::cout << current_camera_cloud->height << std::endl;
         // std::cout << current_camera_cloud->width << std::endl;
 
@@ -686,7 +794,6 @@ class CombinedResultPublisher : public rclcpp::Node
     size_t count_;
 };
 
-
 class SearchResultSubscriber : public rclcpp::Node
 {
   public:
@@ -727,16 +834,7 @@ int main(int argc, char** argv)
   executor.add_node(scanned_cloud_publisher);
   executor.add_node(search_cloud_subscriber);
   executor.add_node(combined_result_publisher);
-  // scanned_cloud_publisher = camera_node->template create_publisher<sensor_msgs::msg::PointCloud2>("scanned_cloud", 10);
   executor.spin();
-  // std::thread([&executor]() { executor.spin(); }).detach();
-  // geometry_msgs::msg::Pose target_pose1;
-  // RCLCPP_INFO(motion_node->get_logger(), "CENTER ON OBJECT");
-  // target_pose1.orientation.w = 1.0;
-  // target_pose1.position.x = 1.0;
-  // target_pose1.position.y = 1.0;
-  // target_pose1.position.z = 1.0;
-  // move_group.setPoseTarget(target_pose1);
   rclcpp::shutdown();
   return 0;
 }

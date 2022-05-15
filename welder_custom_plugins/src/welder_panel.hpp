@@ -49,7 +49,7 @@
 
 #include <sensor_msgs/msg/joy.hpp>
 #include <QPushButton>
-#include <QComboBox>
+#include <QLabel>
 
 class QLineEdit;
 class QSpinBox;
@@ -114,6 +114,8 @@ protected Q_SLOTS:
 
   void addLast();
 
+  void statusCallback(const sensor_msgs::msg::Joy::SharedPtr msg);
+
   // Then we finish up with protected member variables.
 protected:
   QPushButton *btn_scan_;
@@ -127,14 +129,13 @@ protected:
   QPushButton *btn_ex_;
   QPushButton *btn_add_;
 
-  QSpinBox *spin_box_;
-  QComboBox *combo_mode_;
+  QLabel *status_;
+
 
   // The ROS publishers
   rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_publisher_;
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr status_subscriber_;
 
-  // The ROS node handle.
-  // rclcpp::NodeHandle nh_;
 };
 
 }  // end namespace moveit_dashboard
